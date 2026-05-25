@@ -79,6 +79,19 @@ marukyu/
 
 ## Usage
 
+### One-time backend bootstrap
+
+The main stack uses an S3 backend with DynamoDB locking. Before the first `terraform init` on `terraform/`, create those resources:
+
+```bash
+cd marukyu/terraform/bootstrap
+terraform init
+terraform apply
+# Note the bucket and dynamodb_table outputs; the values are hardcoded in terraform/main.tf
+```
+
+The bootstrap state is local (`terraform/bootstrap/terraform.tfstate`, gitignored). Both resources are marked `prevent_destroy = true`.
+
 ### Deploy
 
 ```bash
@@ -148,6 +161,27 @@ terraform apply
 cd marukyu/terraform
 terraform destroy
 ```
+
+## CI/CD
+
+GitHub Actions workflows under `.github/workflows/`:
+
+| Workflow | Trigger | What it does |
+|---|---|---|
+| `terraform-plan.yml` | PR + push to main (paths: `terraform/**`, `monitor_light.py`) | fmt-check, init, validate, plan; comments the plan on the PR |
+| `terraform-apply.yml` | Manual `workflow_dispatch` only | init + plan + apply. Requires input `confirm = APPLY` to proceed. |
+
+### Required GitHub repository secrets
+
+| Secret | Required | Purpose |
+|---|---|---|
+| `AWS_ACCESS_KEY_ID` | yes | IAM user with deploy perms (e.g. `cdk-admin` or `gitlab-ci-terraform`) |
+| `AWS_SECRET_ACCESS_KEY` | yes | Matching secret |
+| `TELEGRAM_BOT_TOKEN` | no | Set together with `TELEGRAM_CHAT_ID` to enable Telegram alerts |
+| `TELEGRAM_CHAT_ID` | no | See above |
+| `TELEGRAM_ALARM_EMAIL` | no | Subscribes to scheduler error alarms |
+
+Set them via `gh secret set <NAME>` or the GitHub UI (Settings → Secrets and variables → Actions).
 
 ## Cost
 

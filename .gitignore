@@ -10,8 +10,12 @@ monitor-key.pem
 
 # Terraform
 terraform/.terraform/
+terraform/bootstrap/.terraform/
 terraform/*.tfstate
 terraform/*.tfstate.backup
+terraform/bootstrap/*.tfstate
+terraform/bootstrap/*.tfstate.backup
+terraform/tfplan
 terraform/lambda/*.zip
 
 # Python

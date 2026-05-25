@@ -10,8 +10,12 @@ terraform {
     }
   }
 
-  backend "local" {
-    path = "terraform.tfstate"
+  backend "s3" {
+    bucket         = "marukyu-tfstate-997730026610"
+    key            = "marukyu/terraform.tfstate"
+    region         = "ap-southeast-1"
+    dynamodb_table = "marukyu-tfstate-lock"
+    encrypt        = true
   }
 }
 
