@@ -29,7 +29,10 @@ terraform init
 terraform apply -var="telegram_bot_token=<TOKEN>" -var="telegram_chat_id=<ID>"
 terraform destroy
 
-# Force reprovision after changing monitor_light.py
+# Force reprovision after changing monitor_light.py.
+# WARNING: this destroys /opt/marukyu-monitor/state.json on the EBS root volume.
+# The first stock transition after redeploy is absorbed as "Initial state recorded"
+# rather than firing an alert.
 terraform taint aws_instance.monitor && terraform apply
 ```
 
@@ -76,7 +79,7 @@ LightweightStockMonitor.run()
 - **EC2**: t2.micro Ubuntu 22.04, `ap-southeast-1`, 8 GB gp3 EBS. IAM role grants only `logs:PutLogEvents` to the CloudWatch log group.
 - **Lambda scheduler** (`terraform/lambda/scheduler.py`): Single function that start/stops the EC2 instance. Triggered by two EventBridge cron rules: start at 9:30 AM JST (Mon–Fri), stop at 5:30 PM JST (Mon–Fri).
 - **Self-bootstrapping**: `user_data.sh.tftpl` is gzip-base64-encoded into EC2 user data (fits the 16 KB limit). It embeds `monitor_light.py` verbatim at deploy time via `${monitor_script}` template variable. **Changing `monitor_light.py` requires `terraform taint aws_instance.monitor`** to reprovision.
-- **State**: Local backend (`terraform/terraform.tfstate`) — not remote.
+- **State**: Local backend (`terraform/terraform.tfstate`) — not remote, not encrypted. **The Telegram bot token and chat ID are stored in plaintext in `terraform.tfstate`** despite `sensitive = true` (which only redacts plan output). Keep the file out of git (covered by `.gitignore`) and treat the `terraform/` directory as a secrets-containing location.
 - **Telegram vs Discord**: Telegram is used because Discord blocks AWS IP ranges (HTTP 403).
 
 ### AWS profile

@@ -17,7 +17,7 @@ free -h
 echo "[2/11] Installing system packages..."
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
-apt-get upgrade -y
+apt-get upgrade -y || echo "WARN: apt-get upgrade returned non-zero, continuing"
 apt-get install -y \
     python3 python3-pip python3-venv \
     wget curl git unzip \
@@ -57,7 +57,7 @@ MONITOR_SCRIPT
 
 echo "[8/11] Installing CloudWatch Agent..."
 wget -q -O /tmp/amazon-cloudwatch-agent.deb https://s3.amazonaws.com/amazoncloudwatch-agent/ubuntu/amd64/latest/amazon-cloudwatch-agent.deb
-dpkg -i /tmp/amazon-cloudwatch-agent.deb
+dpkg -i /tmp/amazon-cloudwatch-agent.deb || apt-get install -fy
 rm /tmp/amazon-cloudwatch-agent.deb
 
 echo "[9/11] Configuring CloudWatch Agent..."
@@ -81,7 +81,8 @@ cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << 'CWCO
 }
 CWCONFIG
 /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
-    -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
+    -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json \
+    || echo "WARN: CloudWatch agent fetch-config returned non-zero, continuing"
 
 echo "[10/11] Creating systemd service..."
 cat > /etc/systemd/system/marukyu-monitor.service << SERVICEFILE
@@ -95,7 +96,7 @@ Type=simple
 User=monitor
 Group=monitor
 WorkingDirectory=/opt/marukyu-monitor
-ExecStart=/opt/marukyu-monitor/venv/bin/python monitor_light.py --interval ${poll_interval}%{ if ssm_bot_token_param != "" } --telegram-ssm-bot-token-param ${ssm_bot_token_param} --telegram-ssm-chat-id-param ${ssm_chat_id_param} --aws-region ${region}%{ endif }
+ExecStart=/opt/marukyu-monitor/venv/bin/python monitor_light.py --interval ${poll_interval}%{ if telegram_enabled } --telegram-ssm-bot-token-param ${ssm_bot_token_param} --telegram-ssm-chat-id-param ${ssm_chat_id_param} --aws-region ${region}%{ endif }
 Restart=always
 RestartSec=30
 StandardOutput=append:/var/log/marukyu-monitor/monitor.log

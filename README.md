@@ -95,6 +95,16 @@ To deploy without Telegram notifications, omit the Telegram variables:
 terraform apply -var="poll_interval=60"
 ```
 
+`telegram_bot_token` and `telegram_chat_id` must be set together (precondition enforced by Terraform); setting only one fails the plan.
+
+To receive an email when the scheduler Lambda errors or the DLQ fills, also pass:
+
+```bash
+terraform apply ... -var="telegram_alarm_email=you@example.com"
+```
+
+> **Secrets warning**: the local Terraform backend writes the Telegram bot token to `terraform/terraform.tfstate` in plaintext (`sensitive = true` only redacts plan output, not state files). The repo's `.gitignore` covers `*.tfstate*`, but treat the `terraform/` directory as a secrets-containing location — don't sync it to unencrypted cloud backups.
+
 ### Instance Access (SSM Session Manager)
 
 ```bash
@@ -129,6 +139,8 @@ cd marukyu/terraform
 terraform taint aws_instance.monitor
 terraform apply
 ```
+
+> **Caveat**: the EBS root volume is destroyed with the instance, including `/opt/marukyu-monitor/state.json`. The first stock transition after the new instance boots is silently absorbed as "Initial state recorded" rather than firing an alert.
 
 ### Teardown
 

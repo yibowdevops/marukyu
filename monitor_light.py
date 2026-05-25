@@ -74,8 +74,11 @@ class SessionCookies:
 
 def parse_products(html: str) -> List[Product]:
     products = []
+    # Require the WooCommerce `type-product` class token so we only match
+    # catalog items, not related-products widgets or category tiles whose
+    # class strings merely contain the substring "product".
     li_pattern = re.compile(
-        r'<li[^>]*class="([^"]*product[^"]*)"[^>]*>(.*?)</li>',
+        r'<li[^>]*class="([^"]*\btype-product\b[^"]*)"[^>]*>(.*?)</li>',
         re.DOTALL,
     )
     link_pattern = re.compile(
@@ -198,10 +201,14 @@ def solve_cloudflare(url: str) -> Optional[SessionCookies]:
         pages = session.context.pages
         user_agent = ""
         if pages:
-            user_agent = pages[0].evaluate("navigator.userAgent")
+            user_agent = pages[0].evaluate("navigator.userAgent") or ""
 
         if not cookies:
             log.error("No cookies extracted from Cloudflare session — solve may have silently failed")
+            return None
+
+        if not user_agent:
+            log.error("Empty User-Agent extracted from Cloudflare session — refusing to cache cookies that won't replay")
             return None
 
         elapsed = time.time() - start
@@ -285,21 +292,30 @@ class LightweightStockMonitor:
         if not self.state_file:
             return
         try:
-            with open(self.state_file) as f:
-                self.previous_state = json.load(f)
-            log.info(f"Loaded state for {len(self.previous_state)} products from {self.state_file}")
+            with open(self.state_file, encoding="utf-8") as f:
+                loaded = json.load(f)
         except FileNotFoundError:
-            pass
+            return
         except Exception as e:
             log.warning(f"Could not load state file: {e}")
+            return
+        if not isinstance(loaded, dict) or not all(
+            isinstance(k, str) and isinstance(v, bool) for k, v in loaded.items()
+        ):
+            log.warning(f"State file {self.state_file} has unexpected shape, ignoring")
+            return
+        self.previous_state = loaded
+        log.info(f"Loaded state for {len(self.previous_state)} products from {self.state_file}")
 
     def _save_state(self) -> None:
         if not self.state_file:
             return
         try:
             tmp = self.state_file + ".tmp"
-            with open(tmp, "w") as f:
+            with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(self.previous_state, f)
+                f.flush()
+                os.fsync(f.fileno())
             os.replace(tmp, self.state_file)
         except Exception as e:
             log.warning(f"Could not save state file: {e}")
@@ -482,20 +498,17 @@ def main():
     telegram_chat_id = args.telegram_chat_id
 
     if args.telegram_ssm_bot_token_param or args.telegram_ssm_chat_id_param:
-        try:
-            import boto3
-            ssm = boto3.client("ssm", region_name=args.aws_region)
-            if args.telegram_ssm_bot_token_param and not telegram_bot_token:
-                telegram_bot_token = ssm.get_parameter(
-                    Name=args.telegram_ssm_bot_token_param, WithDecryption=True
-                )["Parameter"]["Value"]
-            if args.telegram_ssm_chat_id_param and not telegram_chat_id:
-                telegram_chat_id = ssm.get_parameter(
-                    Name=args.telegram_ssm_chat_id_param, WithDecryption=True
-                )["Parameter"]["Value"]
-            log.info("Telegram credentials loaded from SSM")
-        except Exception as e:
-            log.error(f"Failed to fetch Telegram credentials from SSM: {e}")
+        import boto3
+        ssm = boto3.client("ssm", region_name=args.aws_region)
+        if args.telegram_ssm_bot_token_param and not telegram_bot_token:
+            telegram_bot_token = ssm.get_parameter(
+                Name=args.telegram_ssm_bot_token_param, WithDecryption=True
+            )["Parameter"]["Value"]
+        if args.telegram_ssm_chat_id_param and not telegram_chat_id:
+            telegram_chat_id = ssm.get_parameter(
+                Name=args.telegram_ssm_chat_id_param, WithDecryption=True
+            )["Parameter"]["Value"]
+        log.info("Telegram credentials loaded from SSM")
 
     monitor = LightweightStockMonitor(
         url=args.url,

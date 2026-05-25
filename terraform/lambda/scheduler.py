@@ -2,14 +2,12 @@ import logging
 import os
 
 import boto3
-from botocore.exceptions import ClientError
 
 log = logging.getLogger()
 log.setLevel(logging.INFO)
 
 
 def handler(event, context):
-    ec2 = boto3.client("ec2", region_name=os.environ.get("REGION", "ap-southeast-1"))
     action = event.get("action", "start")
     instance_ids = event.get("instance_ids", [])
 
@@ -17,13 +15,14 @@ def handler(event, context):
         return {"statusCode": 400, "body": "No instance_ids provided"}
 
     try:
+        ec2 = boto3.client("ec2", region_name=os.environ.get("REGION", "ap-southeast-1"))
         if action == "start":
             ec2.start_instances(InstanceIds=instance_ids)
         elif action == "stop":
             ec2.stop_instances(InstanceIds=instance_ids)
         else:
             return {"statusCode": 400, "body": f"Unknown action: {action}"}
-    except ClientError as e:
+    except Exception as e:
         log.error("EC2 %s failed for %s: %s", action, instance_ids, e)
         raise
 

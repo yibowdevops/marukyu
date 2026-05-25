@@ -148,39 +148,55 @@ resource "aws_iam_role_policy_attachment" "ec2_ssm_core" {
 
 # ─── Telegram Secrets (SSM Parameter Store) ─────────────────────────
 
+locals {
+  telegram_enabled = var.telegram_bot_token != "" && var.telegram_chat_id != ""
+}
+
+resource "terraform_data" "telegram_pair_check" {
+  lifecycle {
+    precondition {
+      condition     = (var.telegram_bot_token == "") == (var.telegram_chat_id == "")
+      error_message = "telegram_bot_token and telegram_chat_id must both be set or both empty."
+    }
+  }
+}
+
 resource "aws_ssm_parameter" "telegram_bot_token" {
-  count = var.telegram_bot_token != "" ? 1 : 0
+  count = local.telegram_enabled ? 1 : 0
   name  = "/marukyu-monitor/telegram/bot-token"
   type  = "SecureString"
   value = var.telegram_bot_token
 }
 
 resource "aws_ssm_parameter" "telegram_chat_id" {
-  count = var.telegram_chat_id != "" ? 1 : 0
+  count = local.telegram_enabled ? 1 : 0
   name  = "/marukyu-monitor/telegram/chat-id"
   type  = "SecureString"
   value = var.telegram_chat_id
 }
 
-locals {
-  telegram_ssm_arns = concat(
-    var.telegram_bot_token != "" ? [aws_ssm_parameter.telegram_bot_token[0].arn] : [],
-    var.telegram_chat_id != "" ? [aws_ssm_parameter.telegram_chat_id[0].arn] : [],
-  )
-}
-
 resource "aws_iam_role_policy" "ec2_ssm_secrets" {
-  count = length(local.telegram_ssm_arns) > 0 ? 1 : 0
+  count = local.telegram_enabled ? 1 : 0
   name  = "ssm-telegram-secrets"
   role  = aws_iam_role.ec2_instance.id
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Effect   = "Allow"
-      Action   = ["ssm:GetParameter"]
-      Resource = local.telegram_ssm_arns
-    }]
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = ["ssm:GetParameter"]
+        Resource = [
+          aws_ssm_parameter.telegram_bot_token[0].arn,
+          aws_ssm_parameter.telegram_chat_id[0].arn,
+        ]
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["kms:Decrypt"]
+        Resource = "arn:aws:kms:${var.region}:${data.aws_caller_identity.current.account_id}:alias/aws/ssm"
+      },
+    ]
   })
 }
 
@@ -199,13 +215,20 @@ resource "aws_instance" "monitor" {
 
   iam_instance_profile = aws_iam_instance_profile.ec2.name
 
+  metadata_options {
+    http_tokens                 = "required"
+    http_endpoint               = "enabled"
+    http_put_response_hop_limit = 1
+  }
+
   user_data_base64 = base64gzip(templatefile("${path.module}/user_data.sh.tftpl", {
     monitor_script      = file("${path.module}/../monitor_light.py")
     poll_interval       = var.poll_interval
     log_group_name      = aws_cloudwatch_log_group.monitor.name
     region              = var.region
-    ssm_bot_token_param = var.telegram_bot_token != "" ? aws_ssm_parameter.telegram_bot_token[0].name : ""
-    ssm_chat_id_param   = var.telegram_chat_id != "" ? aws_ssm_parameter.telegram_chat_id[0].name : ""
+    telegram_enabled    = local.telegram_enabled
+    ssm_bot_token_param = local.telegram_enabled ? aws_ssm_parameter.telegram_bot_token[0].name : ""
+    ssm_chat_id_param   = local.telegram_enabled ? aws_ssm_parameter.telegram_chat_id[0].name : ""
   }))
 
   root_block_device {
@@ -245,15 +268,55 @@ resource "aws_iam_role_policy" "scheduler_ec2" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Action = [
-        "ec2:StartInstances",
-        "ec2:StopInstances",
-      ]
-      Resource = aws_instance.monitor.arn
-    }]
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "ec2:StartInstances",
+          "ec2:StopInstances",
+        ]
+        Resource = aws_instance.monitor.arn
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["sqs:SendMessage"]
+        Resource = aws_sqs_queue.scheduler_dlq.arn
+      },
+    ]
   })
+}
+
+resource "aws_sqs_queue" "scheduler_dlq" {
+  name                      = "marukyu-monitor-scheduler-dlq"
+  message_retention_seconds = 1209600 # 14 days, the SQS max
+}
+
+resource "aws_lambda_function_event_invoke_config" "scheduler" {
+  function_name                = aws_lambda_function.scheduler.function_name
+  maximum_event_age_in_seconds = 3600
+  maximum_retry_attempts       = 2
+
+  destination_config {
+    on_failure {
+      destination = aws_sqs_queue.scheduler_dlq.arn
+    }
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "scheduler_dlq_depth" {
+  alarm_name          = "marukyu-scheduler-dlq-depth"
+  alarm_description   = "Scheduler Lambda DLQ has unprocessed failed invocations"
+  namespace           = "AWS/SQS"
+  metric_name         = "ApproximateNumberOfMessagesVisible"
+  dimensions          = { QueueName = aws_sqs_queue.scheduler_dlq.name }
+  statistic           = "Maximum"
+  period              = 300
+  evaluation_periods  = 1
+  threshold           = 1
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = var.telegram_alarm_email != "" ? [aws_sns_topic.alarms[0].arn] : []
+  ok_actions          = var.telegram_alarm_email != "" ? [aws_sns_topic.alarms[0].arn] : []
 }
 
 resource "aws_iam_role_policy_attachment" "scheduler_basic" {
@@ -331,6 +394,20 @@ resource "aws_lambda_permission" "allow_stop" {
   source_arn    = aws_cloudwatch_event_rule.stop.arn
 }
 
+# ─── SNS Alarm Topic (optional) ─────────────────────────────────────
+
+resource "aws_sns_topic" "alarms" {
+  count = var.telegram_alarm_email != "" ? 1 : 0
+  name  = "marukyu-monitor-alarms"
+}
+
+resource "aws_sns_topic_subscription" "alarm_email" {
+  count     = var.telegram_alarm_email != "" ? 1 : 0
+  topic_arn = aws_sns_topic.alarms[0].arn
+  protocol  = "email"
+  endpoint  = var.telegram_alarm_email
+}
+
 # ─── CloudWatch Alarm: Lambda Scheduler Errors ──────────────────────
 
 resource "aws_cloudwatch_metric_alarm" "scheduler_errors" {
@@ -345,6 +422,8 @@ resource "aws_cloudwatch_metric_alarm" "scheduler_errors" {
   threshold           = 1
   comparison_operator = "GreaterThanOrEqualToThreshold"
   treat_missing_data  = "notBreaching"
+  alarm_actions       = var.telegram_alarm_email != "" ? [aws_sns_topic.alarms[0].arn] : []
+  ok_actions          = var.telegram_alarm_email != "" ? [aws_sns_topic.alarms[0].arn] : []
 }
 
 # ─── Outputs ────────────────────────────────────────────────────────

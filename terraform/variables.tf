@@ -19,12 +19,18 @@ variable "telegram_bot_token" {
   type        = string
   sensitive   = true
   default     = ""
-  description = "Telegram bot token for stock change notifications"
+  description = "Telegram bot token for stock change notifications. Must be set together with telegram_chat_id."
 }
 
 variable "telegram_chat_id" {
   type        = string
   sensitive   = true
   default     = ""
-  description = "Telegram chat ID for stock change notifications"
+  description = "Telegram chat ID for stock change notifications. Must be set together with telegram_bot_token."
+}
+
+variable "telegram_alarm_email" {
+  type        = string
+  default     = ""
+  description = "Email to subscribe to scheduler error alarms. Empty disables the SNS topic."
 }
