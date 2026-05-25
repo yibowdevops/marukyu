@@ -15,6 +15,7 @@ Usage:
 
 import argparse
 import gc
+import html
 import json
 import logging
 import os
@@ -145,16 +146,16 @@ def notify_macos(title: str, message: str, sound: str = "default") -> None:
 def notify_telegram(bot_token: str, chat_id: str, change: StockChange) -> None:
     emoji = "\u2705" if change.new_status == "In Stock" else "\u274c"
     text = (
-        f"{emoji} *{change.product.name}*\n"
-        f"Price: {change.product.price}\n"
+        f"{emoji} <b>{html.escape(change.product.name)}</b>\n"
+        f"Price: {html.escape(change.product.price)}\n"
         f"Status: {change.old_status} \u2192 {change.new_status}\n"
-        f"[View Product]({change.product.url})"
+        f'<a href="{html.escape(change.product.url)}">View Product</a>'
     )
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     payload = {
         "chat_id": chat_id,
         "text": text,
-        "parse_mode": "Markdown",
+        "parse_mode": "HTML",
         "disable_web_page_preview": True,
     }
     try:
