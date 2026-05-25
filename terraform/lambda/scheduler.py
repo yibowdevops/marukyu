@@ -1,5 +1,11 @@
-import boto3
+import logging
 import os
+
+import boto3
+from botocore.exceptions import ClientError
+
+log = logging.getLogger()
+log.setLevel(logging.INFO)
 
 
 def handler(event, context):
@@ -10,11 +16,16 @@ def handler(event, context):
     if not instance_ids:
         return {"statusCode": 400, "body": "No instance_ids provided"}
 
-    if action == "start":
-        ec2.start_instances(InstanceIds=instance_ids)
-    elif action == "stop":
-        ec2.stop_instances(InstanceIds=instance_ids)
-    else:
-        return {"statusCode": 400, "body": f"Unknown action: {action}"}
+    try:
+        if action == "start":
+            ec2.start_instances(InstanceIds=instance_ids)
+        elif action == "stop":
+            ec2.stop_instances(InstanceIds=instance_ids)
+        else:
+            return {"statusCode": 400, "body": f"Unknown action: {action}"}
+    except ClientError as e:
+        log.error("EC2 %s failed for %s: %s", action, instance_ids, e)
+        raise
 
+    log.info("%s %s OK", action, instance_ids)
     return {"statusCode": 200, "body": f"{action} {instance_ids}"}

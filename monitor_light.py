@@ -17,6 +17,7 @@ import argparse
 import gc
 import json
 import logging
+import os
 import re
 import signal
 import subprocess
@@ -46,6 +47,7 @@ DEFAULT_POLL_INTERVAL = 60
 COOKIE_REFRESH_INTERVAL = 1500  # 25 minutes
 CF_SOLVE_TIMEOUT = 120000
 MAX_RETRIES = 3
+STATE_FILE = "state.json"
 
 
 @dataclass
@@ -73,7 +75,7 @@ class SessionCookies:
 def parse_products(html: str) -> List[Product]:
     products = []
     li_pattern = re.compile(
-        r'<li[^>]*class="([^"]*product[^"]*)"[^>]*id="([^"]*)"[^>]*>(.*?)</li>',
+        r'<li[^>]*class="([^"]*product[^"]*)"[^>]*>(.*?)</li>',
         re.DOTALL,
     )
     link_pattern = re.compile(
@@ -88,7 +90,7 @@ def parse_products(html: str) -> List[Product]:
 
     for match in li_pattern.finditer(html):
         classes = match.group(1)
-        link_block = match.group(3)
+        link_block = match.group(2)
         in_stock = "instock" in classes and "outofstock" not in classes
 
         link_match = link_pattern.search(link_block)
@@ -198,6 +200,10 @@ def solve_cloudflare(url: str) -> Optional[SessionCookies]:
         if pages:
             user_agent = pages[0].evaluate("navigator.userAgent")
 
+        if not cookies:
+            log.error("No cookies extracted from Cloudflare session — solve may have silently failed")
+            return None
+
         elapsed = time.time() - start
         log.info(
             f"Cloudflare solved in {elapsed:.1f}s — "
@@ -261,16 +267,42 @@ class LightweightStockMonitor:
         telegram_bot_token: Optional[str] = None,
         telegram_chat_id: Optional[str] = None,
         macos_notify: bool = False,
+        state_file: Optional[str] = STATE_FILE,
     ):
         self.url = url
         self.poll_interval = poll_interval
         self.telegram_bot_token = telegram_bot_token
         self.telegram_chat_id = telegram_chat_id
         self.macos_notify = macos_notify
+        self.state_file = state_file
         self.previous_state: Dict[str, bool] = {}
         self.session_cookies: Optional[SessionCookies] = None
         self.running = True
+        self._load_state()
         self._setup_signals()
+
+    def _load_state(self) -> None:
+        if not self.state_file:
+            return
+        try:
+            with open(self.state_file) as f:
+                self.previous_state = json.load(f)
+            log.info(f"Loaded state for {len(self.previous_state)} products from {self.state_file}")
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            log.warning(f"Could not load state file: {e}")
+
+    def _save_state(self) -> None:
+        if not self.state_file:
+            return
+        try:
+            tmp = self.state_file + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(self.previous_state, f)
+            os.replace(tmp, self.state_file)
+        except Exception as e:
+            log.warning(f"Could not save state file: {e}")
 
     def _setup_signals(self) -> None:
         signal.signal(signal.SIGINT, self._handle_signal)
@@ -376,6 +408,7 @@ class LightweightStockMonitor:
                                 log.info("Initial state recorded")
 
                             self.previous_state = current_state
+                            self._save_state()
                         else:
                             log.warning("No products found in response")
                     else:
@@ -385,7 +418,9 @@ class LightweightStockMonitor:
                     log.error(f"Unexpected error: {e}", exc_info=True)
 
                 elapsed = time.time() - loop_start
-                mem_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+                # Linux: ru_maxrss in KB; macOS: bytes
+                _rss_divisor = 1024 * 1024 if sys.platform == "darwin" else 1024
+                mem_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / _rss_divisor
                 log.info(f"Fetch took {elapsed:.1f}s | RSS: {mem_mb:.0f} MB")
 
                 sleep_time = max(0, self.poll_interval - elapsed)
@@ -429,9 +464,13 @@ def main():
     )
     parser.add_argument("--url", default=DEFAULT_URL, help="URL to monitor")
     parser.add_argument("--interval", type=int, default=DEFAULT_POLL_INTERVAL)
-    parser.add_argument("--telegram-bot-token", default=None, help="Telegram bot token")
-    parser.add_argument("--telegram-chat-id", default=None, help="Telegram chat ID")
+    parser.add_argument("--telegram-bot-token", default=None, help="Telegram bot token (prefer SSM in production)")
+    parser.add_argument("--telegram-chat-id", default=None, help="Telegram chat ID (prefer SSM in production)")
+    parser.add_argument("--telegram-ssm-bot-token-param", default=None, metavar="SSM_NAME", help="SSM parameter name for bot token")
+    parser.add_argument("--telegram-ssm-chat-id-param", default=None, metavar="SSM_NAME", help="SSM parameter name for chat ID")
+    parser.add_argument("--aws-region", default=None, help="AWS region for SSM (default: auto-detect)")
     parser.add_argument("--macos-notify", action="store_true", help="Enable macOS notifications")
+    parser.add_argument("--state-file", default=STATE_FILE, help="Path to state persistence file ('' to disable)")
     parser.add_argument("--once", action="store_true", help="Single fetch for testing")
     parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
@@ -439,12 +478,32 @@ def main():
     if args.debug:
         logging.getLogger().setLevel(logging.DEBUG)
 
+    telegram_bot_token = args.telegram_bot_token
+    telegram_chat_id = args.telegram_chat_id
+
+    if args.telegram_ssm_bot_token_param or args.telegram_ssm_chat_id_param:
+        try:
+            import boto3
+            ssm = boto3.client("ssm", region_name=args.aws_region)
+            if args.telegram_ssm_bot_token_param and not telegram_bot_token:
+                telegram_bot_token = ssm.get_parameter(
+                    Name=args.telegram_ssm_bot_token_param, WithDecryption=True
+                )["Parameter"]["Value"]
+            if args.telegram_ssm_chat_id_param and not telegram_chat_id:
+                telegram_chat_id = ssm.get_parameter(
+                    Name=args.telegram_ssm_chat_id_param, WithDecryption=True
+                )["Parameter"]["Value"]
+            log.info("Telegram credentials loaded from SSM")
+        except Exception as e:
+            log.error(f"Failed to fetch Telegram credentials from SSM: {e}")
+
     monitor = LightweightStockMonitor(
         url=args.url,
         poll_interval=args.interval,
-        telegram_bot_token=args.telegram_bot_token,
-        telegram_chat_id=args.telegram_chat_id,
+        telegram_bot_token=telegram_bot_token,
+        telegram_chat_id=telegram_chat_id,
         macos_notify=args.macos_notify,
+        state_file=args.state_file or None,
     )
 
     if args.once:

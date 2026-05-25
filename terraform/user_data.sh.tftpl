@@ -1,5 +1,5 @@
 #!/bin/bash
-set -uo pipefail
+set -euo pipefail
 
 exec > >(tee -a /var/log/monitor-setup.log) 2>&1
 echo "=== Setup started at $(date) ==="
@@ -38,13 +38,14 @@ sudo -u monitor /opt/marukyu-monitor/venv/bin/pip install --upgrade pip
 
 echo "[5/11] Installing Python dependencies..."
 sudo -u monitor /opt/marukyu-monitor/venv/bin/pip install \
-    'scrapling>=0.4.7' \
-    'curl_cffi>=0.15.0' \
-    'patchright' \
-    'playwright' \
-    'msgspec' \
-    'camoufox' \
-    'click'
+    'scrapling==0.4.8' \
+    'curl_cffi==0.15.0' \
+    'patchright==1.60.0' \
+    'playwright==1.60.0' \
+    'msgspec==0.21.1' \
+    'camoufox==0.4.11' \
+    'click==8.4.1' \
+    'boto3==1.43.14'
 
 echo "[6/11] Installing Chromium browser for Scrapling..."
 sudo -u monitor HOME=/home/monitor /opt/marukyu-monitor/venv/bin/python -m patchright install chromium || true
@@ -94,7 +95,7 @@ Type=simple
 User=monitor
 Group=monitor
 WorkingDirectory=/opt/marukyu-monitor
-ExecStart=/opt/marukyu-monitor/venv/bin/python monitor_light.py --interval ${poll_interval}${telegram_flags}
+ExecStart=/opt/marukyu-monitor/venv/bin/python monitor_light.py --interval ${poll_interval}%{ if ssm_bot_token_param != "" } --telegram-ssm-bot-token-param ${ssm_bot_token_param} --telegram-ssm-chat-id-param ${ssm_chat_id_param} --aws-region ${region}%{ endif }
 Restart=always
 RestartSec=30
 StandardOutput=append:/var/log/marukyu-monitor/monitor.log

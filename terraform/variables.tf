@@ -10,10 +10,6 @@ variable "instance_type" {
   default = "t2.micro"
 }
 
-variable "key_name" {
-  default = "marukyu-monitor-key"
-}
-
 variable "poll_interval" {
   default     = 60
   description = "Poll interval in seconds"
