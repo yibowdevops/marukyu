@@ -82,5 +82,5 @@ LightweightStockMonitor.run()
 - **State**: Local backend (`terraform/terraform.tfstate`) — not remote, not encrypted. **The Telegram bot token and chat ID are stored in plaintext in `terraform.tfstate`** despite `sensitive = true` (which only redacts plan output). Keep the file out of git (covered by `.gitignore`) and treat the `terraform/` directory as a secrets-containing location.
 - **Telegram vs Discord**: Telegram is used because Discord blocks AWS IP ranges (HTTP 403).
 
-### AWS profile
-All AWS operations use profile `marukyu` in `ap-southeast-1`. Ensure `~/.aws/credentials` has this profile configured.
+### AWS credentials
+The provider uses the standard AWS SDK credential chain — no hardcoded profile. Export `AWS_PROFILE=<your-profile>` (or set `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`) before running `terraform`. Region defaults to `ap-southeast-1` via the `region` variable.

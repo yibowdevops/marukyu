@@ -74,7 +74,7 @@ marukyu/
 
 ## Prerequisites
 
-- AWS CLI configured with profile `marukyu` in `ap-southeast-1`
+- AWS credentials available via the standard SDK chain (e.g. `export AWS_PROFILE=<your-profile>` or `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` env vars). Region defaults to `ap-southeast-1` via the `region` variable.
 - Terraform >= 1.0
 
 ## Usage
@@ -112,7 +112,7 @@ terraform apply ... -var="telegram_alarm_email=you@example.com"
 $(cd marukyu/terraform && terraform output -raw ssm_session_command)
 
 # Or directly:
-aws ssm start-session --target <instance-id> --region ap-southeast-1 --profile marukyu
+aws ssm start-session --target <instance-id> --region ap-southeast-1
 ```
 
 ### Check Logs
@@ -128,8 +128,8 @@ sudo journalctl -u marukyu-monitor -f
 ```bash
 INSTANCE_ID=$(cd marukyu/terraform && terraform output -raw instance_id)
 
-aws ec2 stop-instances  --instance-ids $INSTANCE_ID --region ap-southeast-1 --profile marukyu
-aws ec2 start-instances --instance-ids $INSTANCE_ID --region ap-southeast-1 --profile marukyu
+aws ec2 stop-instances  --instance-ids $INSTANCE_ID --region ap-southeast-1
+aws ec2 start-instances --instance-ids $INSTANCE_ID --region ap-southeast-1
 ```
 
 ### Force Recreate

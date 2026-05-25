@@ -16,8 +16,10 @@ terraform {
 }
 
 provider "aws" {
-  region  = var.region
-  profile = var.aws_profile
+  region = var.region
+  # Credentials resolved from the standard AWS SDK chain (env vars,
+  # AWS_PROFILE, shared config). Set AWS_PROFILE=<your-profile>
+  # before running terraform.
 }
 
 data "aws_availability_zones" "available" {
@@ -442,7 +444,7 @@ output "instance_id" {
 }
 
 output "ssm_session_command" {
-  value = "aws ssm start-session --target ${aws_instance.monitor.id} --region ${var.region} --profile ${var.aws_profile}"
+  value = "aws ssm start-session --target ${aws_instance.monitor.id} --region ${var.region}"
 }
 
 output "log_group" {

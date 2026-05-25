@@ -1,7 +1,3 @@
-variable "aws_profile" {
-  default = "marukyu"
-}
-
 variable "region" {
   default = "ap-southeast-1"
 }
